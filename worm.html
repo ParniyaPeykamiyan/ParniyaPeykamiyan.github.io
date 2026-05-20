@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Parniya's Worm</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; cursor: none; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #wlabel {
+      position: fixed; top: 22px; left: 24px;
+      font: bold 22px monospace;
+      color: #FF1493;
+      pointer-events: none;
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 12px #FF1493;
+    }
+    #charge-bar {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      width: 140px; height: 4px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px; overflow: hidden;
+    }
+    #charge-fill {
+      height: 100%; width: 0%;
+      background: #FF1493;
+      border-radius: 4px;
+      transition: background 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="wlabel">wiggle me ✦</div>
+  <div id="charge-bar"><div id="charge-fill"></div></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const wlabel = document.getElementById('wlabel');
+const chargeFill = document.getElementById('charge-fill');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+let cx, baseY, restY;
+function setDimensions() {
+  cx = canvas.width / 2;
+  baseY = canvas.height + 160;
+  restY = canvas.height * 0.18;
+}
+setDimensions();
+window.addEventListener('resize', setDimensions);
+
+let headX = cx, headY = restY, vx = 0, vy = 0;
+let midX = cx, midY, mvx = 0, mvy = 0;
+let targetX = cx, targetY = restY;
+let lastMX = cx, lastMY = restY;
+let rawSpeed = 0, speed = 0;
+let wiggleCharge = 0, discoLevel = 0, discoHue = 0;
+let audioCtx = null, masterGain = null, beatCount = 0, nextBeat = 0;
+const BPM = 126, STEP = 60 / BPM / 4;
+
+function resetPositions() {
+  midY = (baseY + restY) / 2;
+  midX = cx;
+  headX = cx; headY = restY;
+  targetX = cx; targetY = restY;
+}
+resetPositions();
+window.addEventListener('resize', resetPositions);
+
+document.addEventListener('mousemove', e => {
+  rawSpeed = Math.hypot(e.clientX - lastMX, e.clientY - lastMY);
+  lastMX = e.clientX; lastMY = e.clientY;
+  targetX = e.clientX; targetY = e.clientY;
+});
+document.addEventListener('mouseleave', () => { targetX = cx; targetY = restY; });
+
+// ── AUDIO ──────────────────────────────────────────────────────────────────
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+  masterGain.connect(audioCtx.destination);
+  nextBeat = audioCtx.currentTime;
+  scheduleBeat();
+}
+
+function scheduleBeat() {
+  if (!audioCtx) return;
+  while (nextBeat < audioCtx.currentTime + 0.5) {
+    const s = beatCount % 16;
+    if (s % 4 === 0) kick(nextBeat);
+    if (s === 4 || s === 12) snare(nextBeat);
+    if (s % 2 === 0) hihat(nextBeat, s % 8 === 0 ? 0.18 : 0.06);
+    const bn = [48,0,0,0,51,0,0,0,48,0,0,0,53,0,51,0];
+    if (bn[s]) bassNote(nextBeat, bn[s]);
+    if (s === 2 || s === 6 || s === 10 || s === 14) stab(nextBeat);
+    nextBeat += STEP;
+    beatCount++;
+  }
+  setTimeout(scheduleBeat, 100);
+}
+
+function kick(t) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(masterGain);
+  o.frequency.setValueAtTime(180, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.35);
+  g.gain.setValueAtTime(1.2, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+  o.start(t); o.stop(t + 0.4);
+}
+
+function snare(t) {
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const s = audioCtx.createBufferSource(), f = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+  f.type = 'bandpass'; f.frequency.value = 2500;
+  g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+  s.buffer = buf; s.connect(f); f.connect(g); g.connect(masterGain);
+  s.start(t); s.stop(t + 0.15);
+}
+
+function hihat(t, dur) {
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const s = audioCtx.createBufferSource(), f = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+  f.type = 'highpass'; f.frequency.value = 9000;
+  g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.buffer = buf; s.connect(f); f.connect(g); g.connect(masterGain);
+  s.start(t); s.stop(t + dur);
+}
+
+function midiF(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+function bassNote(t, n) {
+  const o = audioCtx.createOscillator(), f = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+  o.type = 'sawtooth'; f.type = 'lowpass'; f.frequency.value = 450;
+  o.connect(f); f.connect(g); g.connect(masterGain);
+  o.frequency.setValueAtTime(midiF(n), t);
+  g.gain.setValueAtTime(0.55, t); g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 3.5);
+  o.start(t); o.stop(t + STEP * 3.5);
+}
+
+function stab(t) {
+  [60, 64, 67].forEach(n => {
+    const o = audioCtx.createOscillator(), f = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+    o.type = 'square'; f.type = 'lowpass'; f.frequency.value = 1800;
+    o.connect(f); f.connect(g); g.connect(masterGain);
+    o.frequency.setValueAtTime(midiF(n + 12), t);
+    g.gain.setValueAtTime(0.07, t); g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 0.8);
+    o.start(t); o.stop(t + STEP * 0.8);
+  });
+}
+
+// ── WORM MATH ──────────────────────────────────────────────────────────────
+function bezPt(t, p0, p1, p2, p3) {
+  const m = 1 - t;
+  return {
+    x: m*m*m*p0.x + 3*m*m*t*p1.x + 3*m*t*t*p2.x + t*t*t*p3.x,
+    y: m*m*m*p0.y + 3*m*m*t*p1.y + 3*m*t*t*p2.y + t*t*t*p3.y
+  };
+}
+function bezTan(t, p0, p1, p2, p3) {
+  const m = 1 - t;
+  return {
+    x: 3*m*m*(p1.x-p0.x) + 6*m*t*(p2.x-p1.x) + 3*t*t*(p3.x-p2.x),
+    y: 3*m*m*(p1.y-p0.y) + 6*m*t*(p2.y-p1.y) + 3*t*t*(p3.y-p2.y)
+  };
+}
+
+function getCurves() {
+  const lean = headX - cx;
+  const c1p2 = { x: midX - lean * 0.78, y: midY + (baseY - midY) * 0.2 };
+  const c2p1 = { x: 2 * midX - c1p2.x, y: 2 * midY - c1p2.y };
+  return {
+    c1: { p0:{x:cx,y:baseY}, p1:{x:cx+lean*0.18,y:baseY-(baseY-midY)*0.32}, p2:c1p2, p3:{x:midX,y:midY} },
+    c2: { p0:{x:midX,y:midY}, p1:c2p1, p2:{x:headX-lean*0.18,y:headY+(midY-headY)*0.35}, p3:{x:headX,y:headY} }
+  };
+}
+
+function drawDiscoBall(bx, by, radius, phase) {
+  const alpha = Math.min(discoLevel * 2.5, 1);
+  if (alpha < 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  ctx.beginPath(); ctx.moveTo(bx, 0); ctx.lineTo(bx, by - radius);
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(bx, by, radius, 0, Math.PI * 2);
+  ctx.fillStyle = '#111'; ctx.fill();
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.stroke();
+
+  const tSize = radius * 0.22;
+  for (let row = 0; row * tSize < radius * 2 + tSize; row++) {
+    for (let col = 0; col * tSize < radius * 2 + tSize; col++) {
+      const tx = bx - radius + col * tSize, ty = by - radius + row * tSize;
+      const tcx = tx + tSize/2 - bx, tcy = ty + tSize/2 - by;
+      if (Math.hypot(tcx, tcy) < radius - 1) {
+        const la = (discoHue * 0.06 + phase) % (Math.PI * 2);
+        const ta = Math.atan2(tcy, tcx);
+        const diff = Math.abs(((ta - la + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        const lit = Math.max(0, 1 - diff / (Math.PI * 0.4));
+        const tHue = (discoHue + row * 30 + col * 20 + phase * 40) % 360;
+        ctx.fillStyle = `hsl(${tHue},${discoLevel > 0.4 ? 85 : 15}%,${12 + lit * 72}%)`;
+        ctx.fillRect(tx + 1, ty + 1, tSize - 2, tSize - 2);
+      }
+    }
+  }
+
+  if (discoLevel > 0.35) {
+    for (let i = 0; i < 7; i++) {
+      const ang = (discoHue * 0.05 + phase + i * Math.PI * 2 / 7) % (Math.PI * 2);
+      const len = 55 + Math.sin(discoHue * 0.07 + i) * 25;
+      ctx.beginPath();
+      ctx.moveTo(bx + Math.cos(ang) * radius, by + Math.sin(ang) * radius);
+      ctx.lineTo(bx + Math.cos(ang) * (radius + len), by + Math.sin(ang) * (radius + len));
+      ctx.strokeStyle = `hsla(${(discoHue + i * 52) % 360},100%,70%,${discoLevel * 0.55})`;
+      ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawWorm(c, col) {
+  ctx.beginPath();
+  ctx.moveTo(c.c1.p0.x, c.c1.p0.y);
+  ctx.bezierCurveTo(c.c1.p1.x,c.c1.p1.y, c.c1.p2.x,c.c1.p2.y, c.c1.p3.x,c.c1.p3.y);
+  ctx.bezierCurveTo(c.c2.p1.x,c.c2.p1.y, c.c2.p2.x,c.c2.p2.y, c.c2.p3.x,c.c2.p3.y);
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 96;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+}
+
+function drawEyes(c) {
+  const tan = bezTan(1, c.c2.p0, c.c2.p1, c.c2.p2, c.c2.p3);
+  const ang = Math.atan2(tan.y, tan.x), perp = ang - Math.PI / 2;
+  [1, -1].forEach(s => {
+    const ex = c.c2.p3.x + Math.cos(perp) * 16 * s - Math.cos(ang) * 20;
+    const ey = c.c2.p3.y + Math.sin(perp) * 16 * s - Math.sin(ang) * 20;
+    ctx.beginPath(); ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#111'; ctx.fill();
+  });
+}
+
+function drawText(c) {
+  const STEPS = 150, pts = [], lens = [0];
+  for (let i = 0; i <= STEPS; i++) {
+    const t = i / STEPS;
+    pts.push(t < 0.5
+      ? bezPt(t*2, c.c1.p0,c.c1.p1,c.c1.p2,c.c1.p3)
+      : bezPt((t-0.5)*2, c.c2.p0,c.c2.p1,c.c2.p2,c.c2.p3));
+  }
+  for (let i = 1; i <= STEPS; i++)
+    lens.push(lens[i-1] + Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y));
+  const total = lens[STEPS];
+
+  function tAt(tgt) {
+    for (let i = 0; i < lens.length-1; i++)
+      if (lens[i+1] >= tgt) return (i + (tgt-lens[i])/(lens[i+1]-lens[i])) / STEPS;
+    return 1;
+  }
+  function ptAt(ut) {
+    return ut < 0.5
+      ? bezPt(ut*2, c.c1.p0,c.c1.p1,c.c1.p2,c.c1.p3)
+      : bezPt((ut-0.5)*2, c.c2.p0,c.c2.p1,c.c2.p2,c.c2.p3);
+  }
+
+  const text = "Parniya's worm", fs = 14;
+  ctx.font = `bold ${fs}px monospace`;
+  ctx.fillStyle = discoLevel > 0.3 ? `hsl(${(discoHue+180)%360},100%,70%)` : '#FF1493';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+  let arcPos = total * 0.88;
+  for (let i = 0; i < text.length; i++) {
+    if (arcPos < total * 0.2) break;
+    const ut = tAt(arcPos), pt = ptAt(ut), pn = ptAt(Math.max(ut - 0.004, 0));
+    const ang = Math.atan2(pn.y - pt.y, pn.x - pt.x) - Math.PI / 2;
+    ctx.save(); ctx.translate(pt.x, pt.y); ctx.rotate(ang);
+    ctx.fillText(text[i], 0, 0);
+    ctx.restore();
+    arcPos -= fs + 2;
+  }
+}
+
+// ── MAIN LOOP ──────────────────────────────────────────────────────────────
+function loop() {
+  speed += (rawSpeed - speed) * 0.2; rawSpeed *= 0.82;
+
+  if (speed > 18) {
+    wiggleCharge = Math.min(wiggleCharge + 0.006, 1);
+    if (wiggleCharge >= 1 && !audioCtx) initAudio();
+  } else {
+    wiggleCharge = Math.max(wiggleCharge - 0.018, 0);
+  }
+
+  if (wiggleCharge >= 1) discoLevel = Math.min(discoLevel + 0.04, 1);
+  else if (wiggleCharge < 0.5) discoLevel = Math.max(discoLevel - 0.015, 0);
+
+  discoHue = (discoHue + 5 * (0.2 + discoLevel)) % 360;
+
+  if (audioCtx && masterGain)
+    masterGain.gain.setTargetAtTime(discoLevel * 0.85, audioCtx.currentTime, 0.15);
+
+  ctx.fillStyle = discoLevel > 0.05
+    ? `hsl(${discoHue},100%,${18 + discoLevel * 28}%)`
+    : '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const swing = Math.sin(discoHue * 0.04) * 6 * discoLevel;
+  drawDiscoBall(62 + swing, 60, 38, 0);
+  drawDiscoBall(canvas.width - 62 - swing, 60, 38, Math.PI);
+
+  vx += (targetX - headX) * 0.04; vy += (targetY - headY) * 0.04;
+  vx *= 0.86; vy *= 0.86;
+  headX += vx; headY += vy;
+
+  const midTX = cx + (headX - cx) * 0.44;
+  const midTY = baseY + (headY - baseY) * 0.5;
+  mvx += (midTX - midX) * 0.015; mvy += (midTY - midY) * 0.015;
+  mvx *= 0.9; mvy *= 0.9;
+  midX += mvx; midY += mvy;
+
+  const c = getCurves();
+  const wormCol = discoLevel > 0.4
+    ? `hsl(${(discoHue+60)%360},10%,62%)`
+    : '#8a8a8a';
+  drawWorm(c, wormCol);
+  drawEyes(c);
+  drawText(c);
+
+  const cColor = wiggleCharge >= 1
+    ? `hsl(${discoHue},100%,65%)`
+    : `hsl(${300 + wiggleCharge * 60},90%,60%)`;
+  chargeFill.style.width = (wiggleCharge * 100) + '%';
+  chargeFill.style.background = cColor;
+  wlabel.style.color = discoLevel > 0.3 ? `hsl(${discoHue},100%,70%)` : '#FF1493';
+  wlabel.style.textShadow = `0 0 14px ${discoLevel > 0.3 ? `hsl(${discoHue},100%,70%)` : '#FF1493'}`;
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
